@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Universal Speech‑to‑Text Demo</title>
+  <style>
+    body { font-family: sans-serif; padding: 1rem; }
+    #log { white-space: pre-wrap; border: 1px solid #ccc; padding: 1rem; height: 200px; overflow: auto; }
+    button { padding: .5rem 1rem; font-size: 1rem; }
+  </style>
+</head>
+<body>
+
+  <h1>Speech → Text Demo</h1>
+  <button id="startBtn">Start Recognition</button>
+  <div id="log">Click “Start Recognition” to begin…</div>
+
+  <!-- Vosk‑Browser (WASM) from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js"></script>
+
+  <script>
+    const log = msg => {
+      document.getElementById('log').textContent += msg + '\n';
+    };
+
+    // Feature‑detect native Web Speech API
+    const NativeRecog = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    document.getElementById('startBtn').onclick = () => {
+      log('▶ Starting…');
+      if (NativeRecog) {
+        startNative();
+      } else {
+        startVosk();
+      }
+    };
+
+    // —————— 1. Native Web Speech API ——————
+    // Chrome/Edge/Android support; Safari does not :contentReference[oaicite:1]{index=1}.
+    async function startNative() {
+      log('Using native SpeechRecognition API');
+      const recog = new NativeRecog();
+      recog.lang = 'en-US';
+      recog.interimResults = true;
+      recog.maxAlternatives = 1;
+
+      recog.onresult = (ev) => {
+        const transcript = Array.from(ev.results)
+          .map(r => r[0].transcript)
+          .join('');
+        log('Native result: ' + transcript);
+      };
+      recog.onerror = (ev) => log('Native error: ' + ev.error);
+      recog.onend   = () => log('Native recognition ended');
+
+      recog.start();
+    }
+
+    // —————— 2. Vosk‑Browser Fallback ——————
+    // WASM model runs entirely client‑side; works on Safari/iOS :contentReference[oaicite:2]{index=2}.
+    async function startVosk() {
+      log('Native API unavailable → loading Vosk fallback');
+      try {
+        // 2.1 Load model (ensure 'model.tar.gz' is in same directory)
+        const model = await Vosk.createModel('model.tar.gz');
+        log('Vosk model loaded');
+
+        // 2.2 Create recognizer
+        const rec = new model.KaldiRecognizer({ 
+          sampleRate: 16000 
+        });
+        rec.on('result', ({ result }) => {
+          log('Vosk result: ' + result.text);
+        });
+        rec.on('partialresult', ({ result }) => {
+          log('Vosk partial: ' + result.partial);
+        });
+
+        // 2.3 Capture audio
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            channelCount: 1,
+            sampleRate: 16000
+          }
+        });
+        log('Microphone access granted');
+
+        // 2.4 Pipe audio into Vosk
+        const audioContext = new AudioContext();
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        processor.onaudioprocess = (e) => {
+          const data = e.inputBuffer.getChannelData(0);
+          const int16 = new Int16Array(data.length);
+          for (let i = 0; i < data.length; ++i) {
+            int16[i] = data[i] * 0x7FFF;  // float → 16‑bit PCM
+          }
+          rec.acceptWaveform(int16);
+        };
+
+      } catch (err) {
+        log('Vosk error: ' + err);
+      }
+    }
+  </script>
+</body>
+</html>
